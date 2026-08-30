@@ -1,0 +1,97 @@
+# Fluent Forms reference for `form_createFluentForm`
+
+Use this when a request needs a **brand-new** Fluent Form built (a contact form, a request form, ...) — as opposed to embedding a form that already exists on the site, which is the `fluent-form-widget` Elementor widget (`{ "form_list": "<id>" }`, see `ELEMENTOR_WIDGETS.md`). Call `form_createFluentForm({ title, fields, ..., siteId })`.
+
+**Learned from one real Fluent Forms export (2026-07-03)**, not from official docs — Fluent Forms doesn't publicly document this schema. After creating a form this way, **tell the user to open it in Fluent Forms' own editor and check it looks right**, same spirit as anything below Tier A in `ELEMENTOR_WIDGETS.md`. If the user provides another real form export later, use it to correct/expand this file.
+
+## Shape
+
+```json
+{
+  "title": "Contact",
+  "fields": [ /* field nodes, see below */ ],
+  "submitButton": "Jetzt anfragen",
+  "status": "published",
+  "formSettings": { /* optional, merged over defaults */ },
+  "notifications": [ /* optional, one object per email notification */ ]
+}
+```
+
+## Field nodes
+
+A **leaf field**:
+```json
+{ "element": "input_text", "attributes": { "name": "full_name" }, "settings": { "label": "Full name", "admin_field_label": "" } }
+```
+
+**Never set `editor_options` yourself** — veilwright-ai derives it automatically from `element` (real Fluent Forms defaults, checked against `fluentform.latest-stable`'s own source). Fixed 2026-08-13: a field written without it used to open as an empty grey tile with a blank settings panel in the Fluent Forms editor — worked on the frontend, just wasn't editable afterward. Only pass `editor_options` to override one specific key (e.g. a custom tile title); anything you don't set still comes from the derived default.
+
+A **container** (multi-column layout wrapper — every real form uses at least one at the top level, even for a single column):
+```json
+{ "element": "container", "columns": [
+  { "width": "", "fields": [ /* field nodes for this column */ ] }
+]}
+```
+Real exports always wrap top-level fields in at least one single-column container per row — don't put leaf fields directly at the top level of `fields`, wrap each row in a `container` first, even a one-column one.
+
+## Known `element` types (✅ = seen in a real export, confidence otherwise from Fluent Forms' general conventions)
+
+| element | Use | Notes |
+|---|---|---|
+| `container` ✅ | Layout row with 1+ columns | `columns[].fields[]` nested |
+| `input_text` | Single-line text | |
+| `input_name` ✅ | Combined first/last name | seen alongside `name-fields` variant |
+| `input_email` ✅ | Email address | |
+| `textarea` ✅ | Multi-line text | |
+| `select` ✅ | Dropdown | `settings.advanced_options` = array of `{id, label, value, calc_value, image}` |
+| `input_checkbox` ✅ | Checkbox group | same `advanced_options` shape as select |
+| `input_radio` ✅ | Radio group | same `advanced_options` shape |
+| `input_file` ✅ | File upload | `settings.btn_text` |
+| `terms_and_condition` ✅ | Terms/GDPR checkbox | `settings.tnc_html`, `settings.has_checkbox` |
+| `custom_html` ✅ | Raw HTML block | `settings.html_codes` |
+| `button` ✅ | Submit button | used for `submitButton`, see below |
+
+Fluent Forms has more built-in types (phone, number, date, rating, repeater, payment fields, ...) not yet confirmed via a real export — treat those as best-effort/Tier-C-equivalent and say so to the user, same discipline as unverified Elementor widgets.
+
+## Submit button
+
+Usually just pass the button text as a plain string — `"submitButton": "Jetzt anfragen"`. Only build the full node if styling (color, size, alignment) needs to be non-default:
+```json
+{ "element": "button", "attributes": { "type": "submit", "class": "" },
+  "settings": { "button_ui": { "type": "default", "text": "Send", "img_url": "" }, "align": "left", "button_size": "md" } }
+```
+
+## Form settings (confirmation message)
+
+```json
+{ "confirmation": {
+  "redirectTo": "samePage",
+  "messageToShow": "<p>Thank you for your submission.</p>",
+  "samePageFormBehavior": "hide_form",
+  "customPage": null,
+  "customUrl": null
+}}
+```
+
+## Notifications
+
+One object per email notification — Fluent Forms stores each as its own row, not a single array field, so sending 2 emails means 2 objects in the `notifications` array of the request:
+```json
+{ "name": "New Submission",
+  "sendTo": { "type": "email", "email": "office@example.com", "field": null, "routing": [] },
+  "fromName": "Example GmbH",
+  "fromEmail": "",
+  "replyTo": "office@example.com",
+  "bcc": "",
+  "subject": "New submission: {inputs.subject}",
+  "message": "<p>New form entry received.</p>",
+  "active": true
+}
+```
+`sendTo.type` can also be `"field"` with `sendTo.field` set to a field's `name` attribute — routes the notification to whatever email address the user typed into that field (seen in a real export routing to an `email` field, for auto-replying to the submitter).
+
+## Known limitations
+
+- Payment fields (the field type itself, not the `has_payment` flag below), conditional logic (`conditional_logics` appears in every real field's `settings` but always empty/disabled in what's been seen so far), and multi-step forms haven't been verified — don't attempt them, tell the user instead.
+- **Fixed 2026-08-30**: form creation now goes through Fluent Forms' own real save pipeline (`FormService::store()`/`Updater::update()`/`SettingsService::store()`, verified against the real Fluent Forms source) instead of writing directly into its database tables. A created form now gets a real Fluent Forms edit-history entry, `has_payment` is computed correctly instead of always `0`, and third-party Fluent Forms addons that hook into form save now see these forms too. One user-visible change: `veilwright_validation` errors from `POST /fluentforms` can now also be Fluent Forms' own real validation messages (duplicate field `name` attributes, a malformed notification's `sendTo`/`subject`/`message`, ...), not just this plugin's own shape checks — pass those straight through to the user, they're accurate. This does **not** touch `editor_options` — that's a separate, already-fixed problem (below), and Fluent Forms' own save path doesn't compute it either.
+- **Fixed 2026-08-13, was a real bug before this:** fields created without `editor_options` were unreadable/unbearable in the Fluent Forms editor (empty grey tile, blank settings panel) even though they rendered and worked fine on the frontend. Root cause: Fluent Forms' Vue editor loads a field's settings panel via `editor_options.template`, and `editor_options` wasn't being generated or passed through. Now derived automatically — see "Field nodes" above. Not yet spot-checked by opening a resulting form in a live Fluent Forms editor (checked against Fluent Forms' own real source instead, `app/Services/FormBuilder/DefaultElements.php`), so still worth confirming with the user the first few times.
